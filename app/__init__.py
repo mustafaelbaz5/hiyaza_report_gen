@@ -1,0 +1,2 @@
+"""Hiyaza delivery report generator."""
+
