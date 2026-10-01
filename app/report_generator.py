@@ -7,6 +7,9 @@ from docx.oxml.ns import qn
 from .models import ReportInput
 
 
+REPORT_FONT = "Tajawal"
+
+
 def _clean(value: str) -> str:
     return str(value or "").strip()
 
@@ -62,6 +65,44 @@ def _set_cell_text(cell, value: str):
         rtl.set(qn("w:val"), "1")
 
 
+def _apply_report_font(doc: Document):
+    """Apply Tajawal to every report style and every existing/generated run."""
+    for style in doc.styles:
+        if not hasattr(style, "font"):
+            continue
+        style.font.name = REPORT_FONT
+        r_pr = style.font._element.get_or_add_rPr()
+        r_fonts = r_pr.rFonts
+        if r_fonts is None:
+            r_fonts = OxmlElement("w:rFonts")
+            r_pr.insert(0, r_fonts)
+        for script in ("ascii", "hAnsi", "eastAsia", "cs"):
+            r_fonts.set(qn(f"w:{script}"), REPORT_FONT)
+
+    def apply_paragraph(paragraph):
+        for run in paragraph.runs:
+            run.font.name = REPORT_FONT
+            r_pr = run._r.get_or_add_rPr()
+            r_fonts = r_pr.rFonts
+            if r_fonts is None:
+                r_fonts = OxmlElement("w:rFonts")
+                r_pr.insert(0, r_fonts)
+            for script in ("ascii", "hAnsi", "eastAsia", "cs"):
+                r_fonts.set(qn(f"w:{script}"), REPORT_FONT)
+
+    for paragraph in doc.paragraphs:
+        apply_paragraph(paragraph)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    apply_paragraph(paragraph)
+    for section in doc.sections:
+        for part in (section.header, section.footer):
+            for paragraph in part.paragraphs:
+                apply_paragraph(paragraph)
+
+
 def _find_row(table, label: str):
     for row in table.rows:
         if any(_clean(cell.text) == label for cell in row.cells):
@@ -98,6 +139,7 @@ def generate_report(template_path: str | Path, output_path: str | Path, data: Re
 
     doc = Document(template)
     validate_template(doc)
+    _apply_report_font(doc)
 
     replacements = {
         "الجهة المستلمة": data.recipient,

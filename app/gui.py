@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import subprocess
 from datetime import datetime
@@ -129,7 +130,7 @@ class ReportGeneratorApp(tk.Tk):
         self._entry_row(parent, 6, "اسم الجمعية", self.association_var)
         ttk.Label(parent, text="نوع الجمعية", style="Field.TLabel", anchor="e").grid(row=7, column=2, sticky="e", padx=(10, 0), pady=6)
         ttk.Combobox(parent, textvariable=self.type_var, values=["ائتمان زراعي", "إصلاح زراعي"], state="readonly", justify="right").grid(row=7, column=1, sticky="ew", pady=6)
-        self._entry_row(parent, 8, "كود الجمعية", self.code_var)
+        self._code_entry_row(parent, 8)
         self._entry_row(parent, 9, "اسم البلد / الحزمة", self.village_var)
         self._entry_row(parent, 10, "تاريخ التسليم", self.date_var)
 
@@ -139,6 +140,35 @@ class ReportGeneratorApp(tk.Tk):
         self.notes_text.grid(row=12, column=0, columnspan=3, sticky="nsew")
         parent.rowconfigure(12, weight=1)
         ttk.Label(parent, text="يمكنك تعديل أي قيمة بعد التحليل وقبل إنشاء التقرير", style="Hint.TLabel", anchor="e").grid(row=13, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+
+    def _code_entry_row(self, parent, row):
+        ttk.Label(parent, text="كود الجمعية", style="Field.TLabel", anchor="e").grid(
+            row=row, column=2, sticky="e", padx=(10, 0), pady=6
+        )
+        entry = ttk.Entry(parent, textvariable=self.code_var, justify="right")
+        entry.grid(row=row, column=1, sticky="ew", pady=6)
+        ttk.Button(parent, text="لصق", style="Secondary.TButton", command=self.paste_association_code).grid(
+            row=row, column=0, sticky="w", padx=(0, 8), pady=6
+        )
+        entry.bind("<Control-v>", self._paste_code_event)
+        entry.bind("<Control-V>", self._paste_code_event)
+        self.code_entry = entry
+
+    def _paste_code_event(self, _event=None):
+        self.paste_association_code()
+        return "break"
+
+    def paste_association_code(self):
+        try:
+            clipboard = self.clipboard_get().strip()
+        except tk.TclError:
+            messagebox.showinfo("لا يوجد نص", "لا يوجد نص منسوخ في الحافظة.", parent=self)
+            return
+        labeled = re.search(r"(?:كود|code)\s*(?:الجمعية|association)?\s*[:：-]\s*([^\r\n]+)", clipboard, re.IGNORECASE)
+        value = labeled.group(1).strip() if labeled else clipboard
+        self.code_var.set(value.splitlines()[0].strip())
+        self.code_entry.focus_set()
+        self.code_entry.selection_range(0, "end")
 
     def _build_preview(self, parent):
         ttk.Label(parent, text="معاينة التحليل", style="Section.TLabel", anchor="e").pack(fill="x", pady=(0, 10))
