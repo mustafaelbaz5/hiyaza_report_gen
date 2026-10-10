@@ -142,16 +142,14 @@ class ReportGeneratorApp(tk.Tk):
         ttk.Label(parent, text="يمكنك تعديل أي قيمة بعد التحليل وقبل إنشاء التقرير", style="Hint.TLabel", anchor="e").grid(row=13, column=0, columnspan=3, sticky="ew", pady=(5, 0))
 
     def _code_entry_row(self, parent, row):
-        ttk.Label(parent, text="كود الجمعية", style="Field.TLabel", anchor="e").grid(
+        ttk.Label(parent, text="كود الجمعية (من Excel)", style="Field.TLabel", anchor="e").grid(
             row=row, column=2, sticky="e", padx=(10, 0), pady=6
         )
-        entry = ttk.Entry(parent, textvariable=self.code_var, justify="right")
+        entry = ttk.Entry(parent, textvariable=self.code_var, justify="right", state="readonly")
         entry.grid(row=row, column=1, sticky="ew", pady=6)
-        ttk.Button(parent, text="لصق", style="Secondary.TButton", command=self.paste_association_code).grid(
+        ttk.Label(parent, text="يُقرأ تلقائيًا", style="Hint.TLabel", anchor="w").grid(
             row=row, column=0, sticky="w", padx=(0, 8), pady=6
         )
-        entry.bind("<Control-v>", self._paste_code_event)
-        entry.bind("<Control-V>", self._paste_code_event)
         self.code_entry = entry
 
     def _paste_code_event(self, _event=None):
@@ -205,6 +203,7 @@ class ReportGeneratorApp(tk.Tk):
             result = analyze_excel(self.excel_var.get())
             self.analysis = result
             self.association_var.set(result.association_name)
+            self.code_var.set(result.association_code)
             self.type_var.set(result.association_type)
             self.village_var.set(result.village_name)
             self._show_analysis(result)
@@ -246,7 +245,7 @@ class ReportGeneratorApp(tk.Tk):
             messagebox.showwarning("بيانات غير مكتملة", "يجب تحليل ملف Excel أولًا.", parent=self)
             return
         if not self.code_var.get().strip():
-            messagebox.showwarning("كود الجمعية", "أدخل كود الجمعية قبل إنشاء التقرير.", parent=self)
+            messagebox.showwarning("كود الجمعية", "لم يتم العثور على كود الجمعية داخل ملف Excel.", parent=self)
             return
         if not self.association_var.get().strip():
             messagebox.showwarning("اسم الجمعية", "اسم الجمعية غير موجود.", parent=self)

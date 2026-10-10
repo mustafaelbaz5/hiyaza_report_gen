@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
@@ -22,7 +23,7 @@ def _find_value_cell(table, label: str):
     return None
 
 
-def _set_cell_text(cell, value: str):
+def _set_cell_text(cell, value: str, alignment=1):
     if cell is None:
         return
     # Preserve the formatting of the first available run.
@@ -40,9 +41,10 @@ def _set_cell_text(cell, value: str):
             "italic": first_run.italic,
             "color": first_run.font.color.rgb,
         }
+    previous_alignment = cell.paragraphs[0].alignment if cell.paragraphs else None
     cell.text = str(value)
     paragraph = cell.paragraphs[0]
-    paragraph.alignment = 1
+    paragraph.alignment = previous_alignment if alignment is None else alignment
     p_pr = paragraph._p.get_or_add_pPr()
     bidi = p_pr.find(qn("w:bidi"))
     if bidi is None:
@@ -110,9 +112,51 @@ def _find_row(table, label: str):
     return None
 
 
+def _find_special_notes_table(doc: Document):
+    for table in doc.tables:
+        if any("ملخص الحالات الخاصة" in _clean(cell.text) for row in table.rows for cell in row.cells):
+            return table
+    return None
+
+
+def _delete_row(table, row):
+    table._tbl.remove(row._tr)
+
+
+def _clone_note_row(table, template_row):
+    new_tr = deepcopy(template_row._tr)
+    table._tbl.append(new_tr)
+    return table.rows[-1]
+
+
+def _write_special_notes(table, notes: list[str]):
+    fixed_index = None
+    for index, row in enumerate(table.rows):
+        if "رقم الأرض من الحصر الميداني" in _clean(row.cells[0].text):
+            fixed_index = index
+            break
+    if fixed_index is None:
+        raise ValueError("لم يتم العثور على ملاحظة رقم الأرض الثابتة داخل جدول الحالات الخاصة.")
+    if len(table.rows) <= fixed_index + 1:
+        raise ValueError("قالب Word غير متوافق: لا يوجد صف نموذج للملاحظات الإضافية.")
+
+    template_row = table.rows[fixed_index + 1]
+    for row in list(table.rows)[fixed_index + 1:]:
+        _delete_row(table, row)
+
+    notes = [note.strip(" •") for note in notes if _clean(note) and _clean(note) != "لا يوجد"]
+    if not notes:
+        notes = ["لا توجد حالات خاصة إضافية وفقًا للبيانات المتاحة."]
+    for note in notes:
+        row = _clone_note_row(table, template_row)
+        _set_cell_text(row.cells[0], note, alignment=None)
+        if len(row.cells) > 1:
+            _set_cell_text(row.cells[1], "-")
+
+
 def validate_template(doc: Document):
     required_labels = {
-        "الجهة المستلمة", "تاريخ التسليم", "الجهة المنفذة", "حالة التقرير",
+        "الجهة المستلمة", "الجهة المنفذة",
         "اسم الجمعية الرسمي", "نوع الجمعية", "كود الجمعية", "عدد الأحواض",
         "إجمالي عدد القطع", "القطع المسجلة على المنظومة",
         "القطع غير المسجلة على المنظومة", "منها قطع غير محيزة",
@@ -127,8 +171,8 @@ def validate_template(doc: Document):
     missing = sorted(required_labels - found)
     if missing:
         raise ValueError("قالب Word غير متوافق. الحقول الناقصة: " + "، ".join(missing))
-    if len(doc.tables) < 5:
-        raise ValueError("قالب Word غير متوافق: جدول الملاحظات أو المرفقات غير موجود.")
+    if not any("ملخص الحالات الخاصة" in _clean(c.text) for t in doc.tables for r in t.rows for c in r.cells):
+        raise ValueError("قالب Word غير متوافق: قسم ملخص الحالات الخاصة غير موجود.")
 
 
 def generate_report(template_path: str | Path, output_path: str | Path, data: ReportInput):
@@ -173,22 +217,37 @@ def generate_report(template_path: str | Path, output_path: str | Path, data: Re
             percentage_text = "100%" if percentage == 100 else f"{percentage:.1f}%"
             _set_cell_text(row.cells[2], percentage_text)
 
-    # Notes table is identified by its header.
-    for table in doc.tables:
-        if any("ملخص الحالات الخاصة" in _clean(c.text) for r in table.rows for c in r.cells):
-            if len(table.rows) >= 2:
-                _set_cell_text(table.cell(1, 0), data.special_notes or "لا يوجد")
-            break
-
-    package_name = f"ملف التسليم المضغوط باسم {data.village_name}"
-    for table in doc.tables:
-        if any("حزمة التسليم المضغوطة" in _clean(c.text) for r in table.rows for c in r.cells):
-            if len(table.rows) >= 2:
-                _set_cell_text(
-                    table.cell(1, 0),
-                    package_name + "\nيحتوي على قاعدة البيانات الجغرافية وملف بيانات القطع Excel",
-                )
-            break
+    # Preserve the fixed land-number note and add descriptive dynamic notes in separate rows.
+    special_notes = []
+    if data.analysis.placeholder_national_id_count:
+        count = data.analysis.placeholder_national_id_count
+        special_notes.append(
+            f"توجد {count} قطع مسجلة برقم قومي 11111111111111، وهو رقم غير صالح ولا يمثل رقمًا قوميًّا فعليًّا، كما لا يوجد مصدر أو مرجع معتمد لدى الجمعية للبيانات القومية الخاصة بهذه القطع."
+        )
+    if data.analysis.non_held_count:
+        count = data.analysis.non_held_count
+        special_notes.append(
+            f"توجد {count} قطع غير محيزة لدى الجمعية، أي لم يتم تسجيلها على حيازة معتمدة ضمن بيانات الجمعية."
+        )
+    if data.analysis.heirs_without_authorized_count:
+        count = data.analysis.heirs_without_authorized_count
+        special_notes.append(
+            f"توجد {count} حالات حيازة مسجلة بأسماء ورثة دون وجود مفوض عنهم، مما قد يشير إلى عدم حسم ممثل الورثة الحاليين أو احتمال وجود نزاع بينهم، أو عدم استكمال تسجيل الأرض أو نقلها إلى الورثة أو ممثليهم الحاليين."
+        )
+    excluded_note_prefixes = (
+        "الأرض بها جزء بور:", "الأرض بها مبنى:", "الأرض بها مصنع:", "الأرض بها مزرعة:",
+        "غير محيز:", "حالات ورثة دون مفوضين مسجلين:", "أرقام قومية غير صالحة أو غير مكتملة:",
+    )
+    special_notes.extend(
+        note for note in data.analysis.detected_notes
+        if not note.startswith(excluded_note_prefixes)
+    )
+    manual_notes = _clean(data.special_notes)
+    if manual_notes and manual_notes != "لا يوجد":
+        special_notes.extend(line.strip(" •-") for line in manual_notes.splitlines() if line.strip())
+    notes_table = _find_special_notes_table(doc)
+    if notes_table is not None:
+        _write_special_notes(notes_table, special_notes)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     doc.core_properties.title = f"تقرير تسليم {data.association_name}"

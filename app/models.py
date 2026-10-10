@@ -7,6 +7,7 @@ class AnalysisResult:
     source_file: Path
     sheet_name: str
     association_name: str
+    association_code: str
     association_type: str
     village_name: str
     total_parcels: int
@@ -17,6 +18,9 @@ class AnalysisResult:
     registered_percentage: float
     unregistered_percentage: float
     non_held_percentage: float
+    heirs_without_authorized_count: int = 0
+    invalid_national_id_count: int = 0
+    placeholder_national_id_count: int = 0
     detected_notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 

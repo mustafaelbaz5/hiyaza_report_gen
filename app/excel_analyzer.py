@@ -14,6 +14,7 @@ REQUIRED_HEADERS = {
     "اسم الحائز",
     "الرقم القومي للحائز",
     "اسم الجمعية",
+    "كود الجمعية",
     "اسم الحوض",
 }
 
@@ -35,6 +36,16 @@ def _is_valid_parcel_id(value) -> bool:
 
 def _percent(count: int, total: int) -> float:
     return round((count / total * 100), 1) if total else 0.0
+
+
+def _contains_heirs_without_authorized(note: str, holder: str) -> bool:
+    holder_text = clean_text(holder)
+    note_text = normalized_key(note)
+    is_heirs = bool(re.search(r"(?:^|\s)\d+\s*ورث(?:ة|ه)\b", holder_text)) or "ورثة" in holder_text
+    if not is_heirs:
+        return False
+    delegate_terms = ("مفوض عنه", "المفوض عنه", "مفوضة عنه", "وكيل عنه", "وكيلة عنه")
+    return not any(term in note_text for term in delegate_terms)
 
 
 def _summarize_notes(note_counter: Counter) -> list[str]:
@@ -108,6 +119,9 @@ def analyze_excel(path: str | Path) -> AnalysisResult:
     association_values = [tidy_association_name(value(r, "اسم الجمعية")) for r in rows]
     association_values = [x for x in association_values if x]
     association_name = Counter(association_values).most_common(1)[0][0] if association_values else ""
+    association_code_values = [clean_text(value(r, "كود الجمعية")) for r in rows]
+    association_code_values = [x for x in association_code_values if x]
+    association_code = Counter(association_code_values).most_common(1)[0][0] if association_code_values else ""
     association_type = infer_association_type(association_name, ws.title)
     village_name = infer_village_name(association_name)
 
@@ -117,6 +131,9 @@ def analyze_excel(path: str | Path) -> AnalysisResult:
     registered = 0
     non_held = 0
     note_counter = Counter()
+    heirs_without_authorized_count = 0
+    invalid_national_id_count = 0
+    placeholder_national_id_count = 0
     ids = Counter()
     warnings = []
 
@@ -130,15 +147,21 @@ def analyze_excel(path: str | Path) -> AnalysisResult:
             ids[parcel_id] += 1
         if _is_invalid_holding(holding):
             non_held += 1
+        national_id_text = clean_text(national_id).removesuffix(".0")
+        if not _is_valid_national_id(national_id):
+            invalid_national_id_count += 1
+        if national_id_text == "11111111111111":
+            placeholder_national_id_count += 1
         if (_is_valid_parcel_id(parcel_id)
                 and not _is_invalid_holding(holding)
                 and bool(holder)
                 and _is_valid_national_id(national_id)):
             registered += 1
-        if note_header in index:
-            note = normalized_key(value(row, note_header))
-            if note:
-                note_counter[note] += 1
+        note = normalized_key(value(row, note_header)) if note_header in index else ""
+        if note:
+            note_counter[note] += 1
+        if _contains_heirs_without_authorized(note, holder):
+            heirs_without_authorized_count += 1
 
     unregistered = total - registered
     duplicate_ids = [item for item, count in ids.items() if count > 1]
@@ -146,16 +169,27 @@ def analyze_excel(path: str | Path) -> AnalysisResult:
         warnings.append(f"يوجد {len(duplicate_ids)} كود قطعة مكرر في ملف Excel.")
     if len(association_values) and len(set(association_values)) > 1:
         warnings.append("ملف Excel يحتوي على أكثر من اسم جمعية.")
+    if len(association_code_values) and len(set(association_code_values)) > 1:
+        warnings.append("ملف Excel يحتوي على أكثر من كود جمعية.")
     if basin_codes and len(basin_codes) != len(basins):
         warnings.append(
             f"عدد أسماء الأحواض ({len(basins)}) يختلف عن عدد أكواد الأحواض ({len(basin_codes)}). "
             "سيُستخدم عدد أسماء الأحواض في التقرير."
         )
 
+    detected_notes = _summarize_notes(note_counter)
+    if heirs_without_authorized_count:
+        detected_notes.append(f"حالات ورثة دون مفوضين مسجلين: {heirs_without_authorized_count} قطعة")
+    if invalid_national_id_count:
+        detected_notes.append(f"أرقام قومية غير صالحة أو غير مكتملة: {invalid_national_id_count} قطعة")
+
+    wb.close()
+
     return AnalysisResult(
         source_file=source,
         sheet_name=ws.title,
         association_name=association_name,
+        association_code=association_code,
         association_type=association_type,
         village_name=village_name,
         total_parcels=total,
@@ -166,7 +200,10 @@ def analyze_excel(path: str | Path) -> AnalysisResult:
         registered_percentage=_percent(registered, total),
         unregistered_percentage=_percent(unregistered, total),
         non_held_percentage=_percent(non_held, total),
-        detected_notes=_summarize_notes(note_counter),
+        heirs_without_authorized_count=heirs_without_authorized_count,
+        invalid_national_id_count=invalid_national_id_count,
+        placeholder_national_id_count=placeholder_national_id_count,
+        detected_notes=detected_notes,
         warnings=warnings,
     )
 
